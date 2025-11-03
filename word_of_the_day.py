@@ -21,9 +21,10 @@ from urllib.parse import quote
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
 HEADERS = {"User-Agent": "wotd-bot/1.0"}
 
-# --- helpers ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def fetch(url: str) -> str | None:
+    """Fetch text from URL or return None on error."""
     try:
         with urlopen(Request(url, headers=HEADERS), timeout=12) as r:
             return r.read().decode("utf-8")
@@ -31,20 +32,20 @@ def fetch(url: str) -> str | None:
         return None
 
 def mrkdwn_escape(s: str) -> str:
-    # Escape Slack mrkdwn specials so we keep plain text (no accidental links)
+    """Escape Slack mrkdwn special chars so plain text stays plain."""
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 TAG_RE = re.compile(r"<[^>]+>")
 URL_RE = re.compile(r"https?://\S+")
 
 def clean_text(s: str) -> str:
-    # Remove HTML tags and URLs, compress whitespace
+    """Remove HTML tags/URLs and compress whitespace."""
     s = TAG_RE.sub("", s)
     s = URL_RE.sub("", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-# --- word + definitions ----------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def get_random_word() -> str:
     data = fetch("https://random-word-api.herokuapp.com/word?number=1")
@@ -54,7 +55,7 @@ def get_random_word() -> str:
             return str(w).strip()
         except Exception:
             pass
-    # Fallback list (safe, recognisable)
+    # Fallback list of safe, recognisable words
     fallback = [
         "serendipity","parsimonious","pellucid","obdurate","ephemeral",
         "ameliorate","cacophony","loquacious","incisive","salubrious",
@@ -75,7 +76,7 @@ def tidy_definitions(entries: list) -> list[str]:
                 line = clean_text(line)
                 if line:
                     defs.append(line)
-    # de-dup, keep first 3, cap length to keep Slack tidy
+    # de-dup, keep first 3, cap length
     out, seen = [], set()
     for d in defs:
         if d in seen:
@@ -98,7 +99,7 @@ def get_definitions(word: str) -> list[str]:
         pass
     return []
 
-# --- slack -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def post_to_slack(text: str, blocks: list | None = None) -> None:
     payload = {"text": text}
@@ -112,7 +113,7 @@ def post_to_slack(text: str, blocks: list | None = None) -> None:
     with urlopen(req, timeout=12) as r:
         r.read()
 
-# --- main ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     word = get_random_word()
@@ -142,6 +143,8 @@ def main() -> None:
         ]
 
     post_to_slack(text, blocks)
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()

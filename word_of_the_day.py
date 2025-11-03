@@ -7,24 +7,23 @@ Fallback: Wiktionary REST: /api/rest_v1/page/definition/<word>?redirect=true
 
 Env:
 - SLACK_WEBHOOK_URL
+- TARGET_HOUR_LONDON (default 9)
+- TARGET_MINUTE_LONDON (default 0)
+- FORCE_POST ("true"/"false") to bypass time gate (used by workflow_dispatch)
 """
 
 import json
 import os
 import random
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 from urllib.parse import quote
-from datetime import datetime
-from zoneinfo import ZoneInfo  # built-in from Python 3.9+
-
-def should_post_now(target_hour: int, target_minute: int) -> bool:
-    now = datetime.now(ZoneInfo("Europe/London"))
-    return now.hour == target_hour and now.minute == target_minute
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
-HEADERS = {"User-Agent": "wotd-bot/1.5 (contact: example@example.com)"}
+HEADERS = {"User-Agent": "wotd-bot/1.6 (contact: example@example.com)"}
 
 # -------- helpers --------
 
@@ -56,6 +55,10 @@ def dedupe_keep_order(items, limit):
             break
     return out
 
+def should_post_now(target_hour: int, target_minute: int) -> bool:
+    now = datetime.now(ZoneInfo("Europe/London"))
+    return now.hour == target_hour and now.minute == target_minute
+
 # -------- word source --------
 
 def get_random_word() -> str:
@@ -66,7 +69,6 @@ def get_random_word() -> str:
             return str(w).strip()
         except Exception:
             pass
-    # Safe fallback list
     fallback = [
         "serendipity","parsimonious","pellucid","obdurate","ephemeral",
         "ameliorate","cacophony","loquacious","incisive","salubrious",
@@ -104,8 +106,6 @@ def get_from_free_dict(word: str) -> tuple[list[str], list[str]]:
     return [], []
 
 # -------- Wiktionary REST fallback --------
-# Docs: https://en.wiktionary.org/api/rest_v1/ (definition endpoint)
-# Shape: { "en": [ { "partOfSpeech": "...", "definitions": [ {"definition": "...", "synonyms": [...]} ] }, ... ] }
 
 def get_from_wiktionary(word: str) -> tuple[list[str], list[str]]:
     url = f"https://en.wiktionary.org/api/rest_v1/page/definition/{quote(word)}?redirect=true"
@@ -173,17 +173,20 @@ def post_to_slack(word: str, defs: list[str], syns: list[str], wiktionary_url: s
 # -------- main --------
 
 def main() -> None:
+    # Read schedule controls
+    force = os.getenv("FORCE_POST", "false").lower() in ("1", "true", "yes", "y")
     target_hour = int(os.getenv("TARGET_HOUR_LONDON", "9"))
     target_minute = int(os.getenv("TARGET_MINUTE_LONDON", "0"))
 
-    if not should_post_now(target_hour, target_minute):
-        # Skip if it’s not the target time in London
+    if not force and not should_post_now(target_hour, target_minute):
+        print("Skipped: not the scheduled time in Europe/London and FORCE_POST is false.")
         return
 
     word = get_random_word()
     defs, syns = get_from_free_dict(word)
     if not defs:
         defs, syns = get_from_wiktionary(word)
+
     wiktionary = f"https://en.wiktionary.org/wiki/{quote(word)}"
     post_to_slack(word, defs, syns, wiktionary)
 

@@ -19,7 +19,7 @@ from urllib.error import URLError
 from urllib.parse import quote
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
-HEADERS = {"User-Agent": "wotd-bot/1.3"}
+HEADERS = {"User-Agent": "wotd-bot/1.4"}
 
 # ---------- helpers ----------
 
@@ -93,6 +93,9 @@ def get_word_data(word: str) -> tuple[list[str], list[str]]:
                 d, s = parse_entry(e)
                 defs.extend(d)
                 syns.extend(s)
+            # de-dup across entries
+            defs = list(dict.fromkeys(defs))[:3]
+            syns = list(dict.fromkeys(syns))[:6]
             return defs, syns
     except Exception:
         pass
@@ -107,25 +110,24 @@ def post_to_slack(word: str, defs: list[str], syns: list[str], wiktionary_url: s
         {"type": "section", "text": {"type": "mrkdwn", "text": title}},
     ]
 
-    # Definitions
+    # One section block per definition (plain_text). Always renders as separate lines.
     if defs:
-        defs_text = "• " + "\n• ".join(defs)
-        blocks.append({
-            "type": "section",
-            "text": {"type": "plain_text", "text": defs_text, "emoji": False}
-        })
+        for d in defs:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "plain_text", "text": f"• {d}", "emoji": False}
+            })
     else:
         blocks.append({
             "type": "section",
             "text": {"type": "plain_text", "text": "No definition found.", "emoji": False}
         })
 
-    # Synonyms
+    # Synonyms (optional block)
     if syns:
-        syn_text = ", ".join(syns)
         blocks.append({
             "type": "section",
-            "text": {"type": "plain_text", "text": f"Synonyms: {syn_text}", "emoji": False}
+            "text": {"type": "plain_text", "text": "Synonyms: " + ", ".join(syns), "emoji": False}
         })
 
     # Footer / link
@@ -134,10 +136,10 @@ def post_to_slack(word: str, defs: list[str], syns: list[str], wiktionary_url: s
         "elements": [{"type": "mrkdwn", "text": f"<{wiktionary_url}|More on Wiktionary>"}]
     })
 
-    # Fallback text (notifications)
-    fallback = f"Word of the day: {word}\n" + ("\n".join(defs) if defs else "No definition found.")
+    # Fallback text for notifications (no links)
+    fallback_lines = defs if defs else ["No definition found."]
     payload = {
-        "text": fallback,
+        "text": f"Word of the day: {word}\n" + "\n".join(fallback_lines),
         "unfurl_links": False,
         "unfurl_media": False,
         "blocks": blocks

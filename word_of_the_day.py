@@ -19,33 +19,27 @@ from urllib.error import URLError
 from urllib.parse import quote
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
-HEADERS = {"User-Agent": "wotd-bot/1.0"}
+HEADERS = {"User-Agent": "wotd-bot/1.1"}
 
-# ---------------------------------------------------------------------------
+# ---------- helpers ----------
 
 def fetch(url: str) -> str | None:
-    """Fetch text from URL or return None on error."""
     try:
         with urlopen(Request(url, headers=HEADERS), timeout=12) as r:
             return r.read().decode("utf-8")
     except URLError:
         return None
 
-def mrkdwn_escape(s: str) -> str:
-    """Escape Slack mrkdwn special chars so plain text stays plain."""
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
+# Strip HTML tags and URLs, compress whitespace
 TAG_RE = re.compile(r"<[^>]+>")
 URL_RE = re.compile(r"https?://\S+")
-
 def clean_text(s: str) -> str:
-    """Remove HTML tags/URLs and compress whitespace."""
     s = TAG_RE.sub("", s)
     s = URL_RE.sub("", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-# ---------------------------------------------------------------------------
+# ---------- word + defs ----------
 
 def get_random_word() -> str:
     data = fetch("https://random-word-api.herokuapp.com/word?number=1")
@@ -55,7 +49,7 @@ def get_random_word() -> str:
             return str(w).strip()
         except Exception:
             pass
-    # Fallback list of safe, recognisable words
+    # safe fallback list
     fallback = [
         "serendipity","parsimonious","pellucid","obdurate","ephemeral",
         "ameliorate","cacophony","loquacious","incisive","salubrious",
@@ -76,7 +70,7 @@ def tidy_definitions(entries: list) -> list[str]:
                 line = clean_text(line)
                 if line:
                     defs.append(line)
-    # de-dup, keep first 3, cap length
+    # de-dup, keep first 3, cap to keep Slack tidy
     out, seen = [], set()
     for d in defs:
         if d in seen:
@@ -99,12 +93,32 @@ def get_definitions(word: str) -> list[str]:
         pass
     return []
 
-# ---------------------------------------------------------------------------
+# ---------- slack ----------
 
-def post_to_slack(text: str, blocks: list | None = None) -> None:
-    payload = {"text": text}
-    if blocks:
-        payload["blocks"] = blocks
+def post_to_slack(title_text: str, defs: list[str], wiktionary_url: str) -> None:
+    # Title in mrkdwn; definitions in plain_text so Slack won't linkify anything
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": title_text}},
+    ]
+
+    if defs:
+        defs_text = "• " + "\n• ".join(defs)
+        blocks.append({"type": "section",
+                       "text": {"type": "plain_text", "text": defs_text, "emoji": False}})
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"<{wiktionary_url}|More on Wiktionary>"}
+        ]})
+        fallback = f"{title_text}\n" + defs_text  # for notifications
+    else:
+        blocks.append({"type": "section",
+                       "text": {"type": "plain_text", "text": "No definition found.", "emoji": False}})
+        blocks.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"<{wiktionary_url}|Wiktionary>"}
+        ]})
+        fallback = f"{title_text}\nNo definition found."
+
+    payload = {"text": fallback, "blocks": blocks}
+
     req = Request(
         SLACK_WEBHOOK_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -113,38 +127,14 @@ def post_to_slack(text: str, blocks: list | None = None) -> None:
     with urlopen(req, timeout=12) as r:
         r.read()
 
-# ---------------------------------------------------------------------------
+# ---------- main ----------
 
 def main() -> None:
     word = get_random_word()
     defs = get_definitions(word)
     wiktionary = f"https://en.wiktionary.org/wiki/{quote(word)}"
-
-    title = f"*Word of the day*: *{mrkdwn_escape(word)}*"
-
-    if defs:
-        safe_defs = [mrkdwn_escape(d) for d in defs]
-        bullet = "\n".join(f"• {d}" for d in safe_defs)
-        text = f"{title}\n{bullet}"
-        blocks = [
-            {"type": "section", "text": {"type": "mrkdwn", "text": title}},
-            {"type": "section", "text": {"type": "mrkdwn", "text": bullet}},
-            {"type": "context", "elements": [
-                {"type": "mrkdwn", "text": f"<{wiktionary}|More on Wiktionary>"}
-            ]},
-        ]
-    else:
-        text = f"{title}\nNo definition found."
-        blocks = [
-            {"type": "section", "text": {"type": "mrkdwn", "text": title}},
-            {"type": "context", "elements": [
-                {"type": "mrkdwn", "text": f"<{wiktionary}|Wiktionary>"}
-            ]},
-        ]
-
-    post_to_slack(text, blocks)
-
-# ---------------------------------------------------------------------------
+    title = f"*Word of the day*: *{word}*"
+    post_to_slack(title, defs, wiktionary)
 
 if __name__ == "__main__":
     main()

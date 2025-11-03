@@ -2,13 +2,13 @@ name: word-of-the-day
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # run every 15 min (UTC); script posts only at 09:00 UK
+    - cron: "*/15 * * * *"   # run every 15 min (UTC); script posts only at Mon 09:00 UK
   workflow_dispatch:
     inputs:
       force:
         description: "Post now (ignore time gate)"
         required: false
-        default: "false"   # set to "true" when you want to force a manual post
+        default: "false"
 
 jobs:
   post:
@@ -21,7 +21,8 @@ jobs:
       - name: Run the script
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TARGET_HOUR_LONDON: "9"
+          TARGET_DAY_LONDON: "mon"   # mon,tue,wed,thu,fri,sat,sun
+          TARGET_HOUR_LONDON: "9"    # 09:00 UK time
           TARGET_MINUTE_LONDON: "0"
           FORCE_POST: ${{ github.event.inputs.force }}
         run: python3 word_of_the_day.py

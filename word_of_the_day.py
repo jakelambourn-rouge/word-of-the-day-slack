@@ -2,14 +2,19 @@
 """
 Word of the Day to Slack via Incoming Webhook.
 
+Schedule:
+- Posts only at the specified UK local weekday/time (handles BST/GMT).
+- Can be forced via FORCE_POST="true" (workflow_dispatch input).
+
 Primary: dictionaryapi.dev
 Fallback: Wiktionary REST: /api/rest_v1/page/definition/<word>?redirect=true
 
 Env:
 - SLACK_WEBHOOK_URL
-- TARGET_HOUR_LONDON (default 9)
-- TARGET_MINUTE_LONDON (default 0)
-- FORCE_POST ("true"/"false") to bypass time gate (used by workflow_dispatch)
+- TARGET_DAY_LONDON   (e.g., "mon"; default "mon")
+- TARGET_HOUR_LONDON  (e.g., "9"; default "9")
+- TARGET_MINUTE_LONDON(e.g., "0"; default "0")
+- FORCE_POST          ("true"/"false") to bypass time gate
 """
 
 import json
@@ -23,7 +28,7 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import quote
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
-HEADERS = {"User-Agent": "wotd-bot/1.6 (contact: example@example.com)"}
+HEADERS = {"User-Agent": "wotd-bot/1.7 (contact: example@example.com)"}
 
 # -------- helpers --------
 
@@ -55,9 +60,32 @@ def dedupe_keep_order(items, limit):
             break
     return out
 
-def should_post_now(target_hour: int, target_minute: int) -> bool:
+# ---- scheduling (Europe/London) ----
+
+WKD_MAP = {
+    "mon": 0, "monday": 0,
+    "tue": 1, "tuesday": 1,
+    "wed": 2, "wednesday": 2,
+    "thu": 3, "thursday": 3,
+    "fri": 4, "friday": 4,
+    "sat": 5, "saturday": 5,
+    "sun": 6, "sunday": 6,
+}
+
+def parse_weekday(val: str, default: int = 0) -> int:
+    val = (val or "").strip().lower()
+    if val.isdigit():
+        n = int(val)
+        return n % 7
+    return WKD_MAP.get(val, default)
+
+def should_post_now(target_weekday: int, target_hour: int, target_minute: int) -> bool:
     now = datetime.now(ZoneInfo("Europe/London"))
-    return now.hour == target_hour and now.minute == target_minute
+    return (
+        now.weekday() == target_weekday
+        and now.hour == target_hour
+        and now.minute == target_minute
+    )
 
 # -------- word source --------
 
@@ -173,12 +201,12 @@ def post_to_slack(word: str, defs: list[str], syns: list[str], wiktionary_url: s
 # -------- main --------
 
 def main() -> None:
-    # Read schedule controls
     force = os.getenv("FORCE_POST", "false").lower() in ("1", "true", "yes", "y")
+    target_weekday = parse_weekday(os.getenv("TARGET_DAY_LONDON", "mon"), 0)  # Monday default
     target_hour = int(os.getenv("TARGET_HOUR_LONDON", "9"))
     target_minute = int(os.getenv("TARGET_MINUTE_LONDON", "0"))
 
-    if not force and not should_post_now(target_hour, target_minute):
+    if not force and not should_post_now(target_weekday, target_hour, target_minute):
         print("Skipped: not the scheduled time in Europe/London and FORCE_POST is false.")
         return
 

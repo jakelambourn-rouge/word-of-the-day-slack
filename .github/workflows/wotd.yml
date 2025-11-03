@@ -2,9 +2,8 @@ name: word-of-the-day
 
 on:
   schedule:
-    # Run every day at 09:00 London time
-    - cron: "0 11 * * *"
-  workflow_dispatch:  # allows manual run
+    - cron: "*/5 * * * *"  # every 5 minutes (UTC)
+  workflow_dispatch:
 
 jobs:
   post:
@@ -17,4 +16,6 @@ jobs:
       - name: Run the script
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TARGET_HOUR_LONDON: "11"   # 11:10 Europe/London
+          TARGET_MINUTE_LONDON: "10"
         run: python3 word_of_the_day.py

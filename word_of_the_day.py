@@ -19,7 +19,7 @@ from urllib.error import URLError
 from urllib.parse import quote
 
 SLACK_WEBHOOK_URL = os.environ["SLACK_WEBHOOK_URL"]
-HEADERS = {"User-Agent": "wotd-bot/1.1"}
+HEADERS = {"User-Agent": "wotd-bot/1.3"}
 
 # ---------- helpers ----------
 
@@ -57,67 +57,91 @@ def get_random_word() -> str:
     ]
     return random.choice(fallback)
 
-def tidy_definitions(entries: list) -> list[str]:
-    defs: list[str] = []
-    for e in entries:
-        for m in e.get("meanings", []):
-            pos = m.get("partOfSpeech", "")
-            for d in m.get("definitions", []):
-                defi = d.get("definition")
-                if not defi:
-                    continue
+def parse_entry(entry: dict) -> tuple[list[str], list[str]]:
+    """Return (definitions, synonyms) from a single API entry."""
+    defs, syns = [], []
+    for meaning in entry.get("meanings", []):
+        pos = meaning.get("partOfSpeech", "")
+        # Definitions
+        for d in meaning.get("definitions", []):
+            defi = d.get("definition")
+            if defi:
                 line = f"{pos}: {defi}" if pos else str(defi)
                 line = clean_text(line)
                 if line:
                     defs.append(line)
-    # de-dup, keep first 3, cap to keep Slack tidy
-    out, seen = [], set()
-    for d in defs:
-        if d in seen:
-            continue
-        seen.add(d)
-        out.append(d[:240])
-        if len(out) >= 3:
-            break
-    return out
+        # Synonyms
+        for s in meaning.get("synonyms", []):
+            s = clean_text(s)
+            if s:
+                syns.append(s)
+    # de-dup and trim
+    defs = list(dict.fromkeys(defs))[:3]
+    syns = list(dict.fromkeys(syns))[:6]
+    return defs, syns
 
-def get_definitions(word: str) -> list[str]:
+def get_word_data(word: str) -> tuple[list[str], list[str]]:
+    """Return (definitions, synonyms)."""
     data = fetch(f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word)}")
     if not data:
-        return []
+        return [], []
     try:
         parsed = json.loads(data)
         if isinstance(parsed, list):
-            return tidy_definitions(parsed)
+            defs, syns = [], []
+            for e in parsed:
+                d, s = parse_entry(e)
+                defs.extend(d)
+                syns.extend(s)
+            return defs, syns
     except Exception:
         pass
-    return []
+    return [], []
 
 # ---------- slack ----------
 
-def post_to_slack(title_text: str, defs: list[str], wiktionary_url: str) -> None:
-    # Title in mrkdwn; definitions in plain_text so Slack won't linkify anything
+def post_to_slack(word: str, defs: list[str], syns: list[str], wiktionary_url: str) -> None:
+    title = f"*Word of the day*: *{word}*"
+
     blocks = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": title_text}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": title}},
     ]
 
+    # Definitions
     if defs:
         defs_text = "• " + "\n• ".join(defs)
-        blocks.append({"type": "section",
-                       "text": {"type": "plain_text", "text": defs_text, "emoji": False}})
-        blocks.append({"type": "context", "elements": [
-            {"type": "mrkdwn", "text": f"<{wiktionary_url}|More on Wiktionary>"}
-        ]})
-        fallback = f"{title_text}\n" + defs_text  # for notifications
+        blocks.append({
+            "type": "section",
+            "text": {"type": "plain_text", "text": defs_text, "emoji": False}
+        })
     else:
-        blocks.append({"type": "section",
-                       "text": {"type": "plain_text", "text": "No definition found.", "emoji": False}})
-        blocks.append({"type": "context", "elements": [
-            {"type": "mrkdwn", "text": f"<{wiktionary_url}|Wiktionary>"}
-        ]})
-        fallback = f"{title_text}\nNo definition found."
+        blocks.append({
+            "type": "section",
+            "text": {"type": "plain_text", "text": "No definition found.", "emoji": False}
+        })
 
-    payload = {"text": fallback, "blocks": blocks}
+    # Synonyms
+    if syns:
+        syn_text = ", ".join(syns)
+        blocks.append({
+            "type": "section",
+            "text": {"type": "plain_text", "text": f"Synonyms: {syn_text}", "emoji": False}
+        })
+
+    # Footer / link
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"<{wiktionary_url}|More on Wiktionary>"}]
+    })
+
+    # Fallback text (notifications)
+    fallback = f"Word of the day: {word}\n" + ("\n".join(defs) if defs else "No definition found.")
+    payload = {
+        "text": fallback,
+        "unfurl_links": False,
+        "unfurl_media": False,
+        "blocks": blocks
+    }
 
     req = Request(
         SLACK_WEBHOOK_URL,
@@ -131,10 +155,9 @@ def post_to_slack(title_text: str, defs: list[str], wiktionary_url: str) -> None
 
 def main() -> None:
     word = get_random_word()
-    defs = get_definitions(word)
+    defs, syns = get_word_data(word)
     wiktionary = f"https://en.wiktionary.org/wiki/{quote(word)}"
-    title = f"*Word of the day*: *{word}*"
-    post_to_slack(title, defs, wiktionary)
+    post_to_slack(word, defs, syns, wiktionary)
 
 if __name__ == "__main__":
     main()

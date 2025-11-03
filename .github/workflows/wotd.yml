@@ -3,7 +3,7 @@ name: word-of-the-day
 on:
   schedule:
     - cron: "*/5 * * * *"  # run every 5 minutes (UTC) – for testing
-  workflow_dispatch:        # allows manual run
+  workflow_dispatch:
 
 jobs:
   post:
